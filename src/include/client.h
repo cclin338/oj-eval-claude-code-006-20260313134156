@@ -16,9 +16,6 @@ extern int total_mines;  // The count of mines of the game map.
 
 // Global variables for client state
 char client_map[35][35];  // Current known state of the map
-bool client_visited[35][35];  // True if cell has been visited
-bool client_marked[35][35];   // True if cell has been marked as mine
-int unknown_neighbors[35][35]; // Count of unknown neighbors for each cell
 
 /**
  * @brief The definition of function Execute(int, int, bool)
@@ -48,9 +45,6 @@ void InitGame() {
   for (int i = 0; i < rows; i++) {
     for (int j = 0; j < columns; j++) {
       client_map[i][j] = '?';
-      client_visited[i][j] = false;
-      client_marked[i][j] = false;
-      unknown_neighbors[i][j] = 0;
     }
   }
 
@@ -75,15 +69,6 @@ void ReadMap() {
     std::cin >> line;
     for (int j = 0; j < columns; j++) {
       client_map[i][j] = line[j];
-
-      if (line[j] >= '0' && line[j] <= '8') {
-        client_visited[i][j] = true;
-      } else if (line[j] == 'X') {
-        // Hit a mine, game over
-        client_visited[i][j] = true;
-      } else if (line[j] == '@') {
-        client_marked[i][j] = true;
-      }
     }
   }
 }
@@ -98,83 +83,61 @@ void Decide() {
   int dx[] = {-1, -1, -1, 0, 0, 1, 1, 1};
   int dy[] = {-1, 0, 1, -1, 1, -1, 0, 1};
 
-  // Update unknown neighbors count
+  // Strategy 1: Mark obvious mines (where remaining mines = unknown neighbors)
   for (int i = 0; i < rows; i++) {
     for (int j = 0; j < columns; j++) {
-      if (client_visited[i][j] && client_map[i][j] >= '0' && client_map[i][j] <= '8') {
-        int unknown = 0;
-        int marked = 0;
-        for (int d = 0; d < 8; d++) {
-          int ni = i + dx[d];
-          int nj = j + dy[d];
-          if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
-            if (client_map[ni][nj] == '?') {
-              unknown++;
-            } else if (client_marked[ni][nj]) {
-              marked++;
-            }
-          }
-        }
-        unknown_neighbors[i][j] = unknown;
-      }
-    }
-  }
-
-  // Strategy 1: Find cells where all unknown neighbors must be mines
-  for (int i = 0; i < rows; i++) {
-    for (int j = 0; j < columns; j++) {
-      if (client_visited[i][j] && client_map[i][j] >= '0' && client_map[i][j] <= '8') {
+      if (client_map[i][j] >= '0' && client_map[i][j] <= '8') {
         int mine_count = client_map[i][j] - '0';
         int marked = 0;
         int unknown = 0;
+        int first_unknown_r = -1, first_unknown_c = -1;
 
         for (int d = 0; d < 8; d++) {
           int ni = i + dx[d];
           int nj = j + dy[d];
           if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
-            if (client_marked[ni][nj]) {
+            if (client_map[ni][nj] == '@') {
               marked++;
             } else if (client_map[ni][nj] == '?') {
               unknown++;
-            }
-          }
-        }
-
-        // If remaining mines equals unknown cells, mark all unknowns
-        if (unknown > 0 && mine_count - marked == unknown) {
-          for (int d = 0; d < 8; d++) {
-            int ni = i + dx[d];
-            int nj = j + dy[d];
-            if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
-              if (client_map[ni][nj] == '?') {
-                Execute(ni, nj, 1);  // Mark as mine
-                return;
+              if (first_unknown_r == -1) {
+                first_unknown_r = ni;
+                first_unknown_c = nj;
               }
             }
           }
         }
+
+        // If all remaining unknowns must be mines
+        if (unknown > 0 && mine_count - marked == unknown) {
+          Execute(first_unknown_r, first_unknown_c, 1);  // Mark as mine
+          return;
+        }
       }
     }
   }
 
-  // Strategy 2: Find cells where all mines are marked, auto-explore
+  // Strategy 2: Auto-explore where all mines are marked
   for (int i = 0; i < rows; i++) {
     for (int j = 0; j < columns; j++) {
-      if (client_visited[i][j] && client_map[i][j] >= '1' && client_map[i][j] <= '8') {
+      if (client_map[i][j] >= '1' && client_map[i][j] <= '8') {
         int mine_count = client_map[i][j] - '0';
         int marked = 0;
+        bool has_unknown = false;
 
         for (int d = 0; d < 8; d++) {
           int ni = i + dx[d];
           int nj = j + dy[d];
           if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
-            if (client_marked[ni][nj]) {
+            if (client_map[ni][nj] == '@') {
               marked++;
+            } else if (client_map[ni][nj] == '?') {
+              has_unknown = true;
             }
           }
         }
 
-        if (marked == mine_count) {
+        if (has_unknown && marked == mine_count) {
           Execute(i, j, 2);  // Auto-explore
           return;
         }
@@ -182,94 +145,42 @@ void Decide() {
     }
   }
 
-  // Strategy 3: Find a safe cell to visit (advanced logic)
-  // Look for cells that can be deduced as safe through constraint satisfaction
-  for (int i = 0; i < rows; i++) {
-    for (int j = 0; j < columns; j++) {
-      if (client_map[i][j] == '?') {
-        // Check if this cell can be proven safe by analyzing constraints
-        bool might_be_safe = true;
-        bool proven_safe = false;
-
-        // Check all visited neighbors
-        for (int d1 = 0; d1 < 8; d1++) {
-          int ni1 = i + dx[d1];
-          int nj1 = j + dy[d1];
-          if (ni1 >= 0 && ni1 < rows && nj1 >= 0 && nj1 < columns) {
-            if (client_visited[ni1][nj1] && client_map[ni1][nj1] >= '0' && client_map[ni1][nj1] <= '8') {
-              int mine_count1 = client_map[ni1][nj1] - '0';
-              int marked1 = 0;
-              int unknown1 = 0;
-
-              for (int d2 = 0; d2 < 8; d2++) {
-                int ni2 = ni1 + dx[d2];
-                int nj2 = nj1 + dy[d2];
-                if (ni2 >= 0 && ni2 < rows && nj2 >= 0 && nj2 < columns) {
-                  if (client_marked[ni2][nj2]) {
-                    marked1++;
-                  } else if (client_map[ni2][nj2] == '?') {
-                    unknown1++;
-                  }
-                }
-              }
-
-              // If all mines for this neighbor are already marked, this cell is safe
-              if (marked1 == mine_count1) {
-                proven_safe = true;
-              }
-            }
-          }
-        }
-
-        if (proven_safe) {
-          Execute(i, j, 0);  // Visit this safe cell
-          return;
-        }
-      }
-    }
-  }
-
-  // Strategy 4: If no safe move found, pick the cell with lowest risk
-  // Find unvisited cells with most visited neighbors (likely safer)
-  int best_i = -1, best_j = -1;
-  int max_visited_neighbors = -1;
+  // Strategy 3: Find safest cell to visit
+  // Pick unvisited cell with max visited neighbors and min marked neighbors
+  int best_r = -1, best_c = -1;
+  int best_score = -1000;
 
   for (int i = 0; i < rows; i++) {
     for (int j = 0; j < columns; j++) {
       if (client_map[i][j] == '?') {
-        int visited_neighbors = 0;
+        int visited_count = 0;
+        int marked_count = 0;
+
         for (int d = 0; d < 8; d++) {
           int ni = i + dx[d];
           int nj = j + dy[d];
           if (ni >= 0 && ni < rows && nj >= 0 && nj < columns) {
-            if (client_visited[ni][nj]) {
-              visited_neighbors++;
+            if (client_map[ni][nj] >= '0' && client_map[ni][nj] <= '8') {
+              visited_count++;
+            } else if (client_map[ni][nj] == '@') {
+              marked_count++;
             }
           }
         }
 
-        if (visited_neighbors > max_visited_neighbors) {
-          max_visited_neighbors = visited_neighbors;
-          best_i = i;
-          best_j = j;
+        int score = visited_count * 10 - marked_count * 5;
+        if (score > best_score) {
+          best_score = score;
+          best_r = i;
+          best_c = j;
         }
       }
     }
   }
 
-  if (best_i != -1) {
-    Execute(best_i, best_j, 0);  // Visit best guess
+  if (best_r != -1) {
+    Execute(best_r, best_c, 0);
     return;
-  }
-
-  // Fallback: visit any unvisited cell
-  for (int i = 0; i < rows; i++) {
-    for (int j = 0; j < columns; j++) {
-      if (client_map[i][j] == '?') {
-        Execute(i, j, 0);
-        return;
-      }
-    }
   }
 }
 
